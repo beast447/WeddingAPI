@@ -7,8 +7,10 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,10 +19,62 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
+
+const (
+	maxNameLen  = 120
+	maxEmailLen = 254
+	maxNoteLen  = 1000
+	maxGuests   = 20
+)
+
+var emailRe = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+
+// cleanAndValidateRSVP trims and validates the submission in place, returning a
+// user-facing error message (empty string means valid).
+func cleanAndValidateRSVP(in *RSVP) string {
+	in.Name = strings.TrimSpace(in.Name)
+	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
+	in.Allergies = strings.TrimSpace(in.Allergies)
+	in.Questions = strings.TrimSpace(in.Questions)
+
+	if in.Name == "" {
+		return "Please enter your full name."
+	}
+	if len(in.Name) > maxNameLen {
+		return "That name is too long."
+	}
+	if in.Email == "" {
+		return "Please enter your email address."
+	}
+	if len(in.Email) > maxEmailLen || !emailRe.MatchString(in.Email) {
+		return "Please enter a valid email address."
+	}
+	if len(in.Allergies) > maxNoteLen || len(in.Questions) > maxNoteLen {
+		return "Your notes are a bit too long — please shorten them."
+	}
+
+	cleaned := make([]Guest, 0, len(in.AdditionalGuests))
+	for _, g := range in.AdditionalGuests {
+		g.Name = strings.TrimSpace(g.Name)
+		if g.Name == "" {
+			continue
+		}
+		if len(g.Name) > maxNameLen {
+			return "A guest name is too long."
+		}
+		cleaned = append(cleaned, g)
+	}
+	if len(cleaned) > maxGuests {
+		return "That's a lot of guests — please contact us directly."
+	}
+	in.AdditionalGuests = cleaned
+	return ""
+}
 
 const sessionTTL = 24 * time.Hour
 
@@ -187,7 +241,12 @@ func main() {
 		var rsvp RSVP
 		decoder := json.NewDecoder(c.Request.Body)
 		if err := decoder.Decode(&rsvp); err != nil {
-			c.AbortWithError(500, err)
+			c.JSON(400, gin.H{"error": "We couldn't read that submission. Please try again."})
+			return
+		}
+
+		if msg := cleanAndValidateRSVP(&rsvp); msg != "" {
+			c.JSON(400, gin.H{"error": msg})
 			return
 		}
 
@@ -212,6 +271,11 @@ func main() {
 			Question:  pgtype.Text{String: rsvp.Questions, Valid: true},
 		})
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				c.JSON(409, gin.H{"error": "This email address has already submitted an RSVP."})
+				return
+			}
 			c.AbortWithError(500, err)
 			return
 		}
