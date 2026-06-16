@@ -62,6 +62,19 @@ func (q *Queries) CreateRsvp(ctx context.Context, arg CreateRsvpParams) (Rsvp, e
 	return i, err
 }
 
+const deleteRsvp = `-- name: DeleteRsvp :execrows
+DELETE FROM rsvps
+WHERE ID = $1
+`
+
+func (q *Queries) DeleteRsvp(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRsvp, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getRsvpByEmail = `-- name: GetRsvpByEmail :one
 SELECT Email
 FROM rsvps

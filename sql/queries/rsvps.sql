@@ -21,3 +21,7 @@ ORDER BY CreatedAt;
 SELECT Email
 FROM rsvps
 WHERE Email = $1;
+
+-- name: DeleteRsvp :execrows
+DELETE FROM rsvps
+WHERE ID = $1;

@@ -127,7 +127,7 @@ func main() {
 	server := gin.Default()
 	server.Use(cors.New(cors.Config{
 		AllowOrigins: []string{frontendURL},
-		AllowMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
 	}))
 
@@ -196,6 +196,24 @@ func main() {
 			resp[i] = toRSVPResponse(u)
 		}
 		c.JSON(200, resp)
+	})
+
+	server.DELETE("/api/rsvps/:id", requireAuth(programState.sessionSecret), func(c *gin.Context) {
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(400, gin.H{"error": "invalid id"})
+			return
+		}
+		rows, err := programState.queries.DeleteRsvp(c.Request.Context(), pgtype.UUID{Bytes: id, Valid: true})
+		if err != nil {
+			c.AbortWithError(500, err)
+			return
+		}
+		if rows == 0 {
+			c.JSON(404, gin.H{"error": "not found"})
+			return
+		}
+		c.Status(204)
 	})
 
 	port := os.Getenv("PORT")
