@@ -25,34 +25,53 @@ import (
 const sessionTTL = 24 * time.Hour
 
 type state struct {
+	db            *pgxpool.Pool
 	queries       *database.Queries
 	adminPassword string
 	sessionSecret string
 }
 
+// Guest is an additional party member (spouse/child) sent with an RSVP.
+type Guest struct {
+	Name    string `json:"name"`
+	IsChild bool   `json:"isChild"`
+}
+
 type RSVP struct {
-	Name      string `json:"name"`
-	Email     string `json:"email"`
-	Attending bool   `json:"attending"`
-	Allergies string `json:"allergies,omitempty"`
-	Drinker   bool   `json:"drinker,omitempty"`
-	Questions string `json:"questions,omitempty"`
+	Name             string  `json:"name"`
+	Email            string  `json:"email"`
+	Attending        bool    `json:"attending"`
+	Allergies        string  `json:"allergies,omitempty"`
+	Drinker          bool    `json:"drinker,omitempty"`
+	Questions        string  `json:"questions,omitempty"`
+	AdditionalGuests []Guest `json:"additionalGuests,omitempty"`
+}
+
+// GuestResponse is the JSON shape for an additional party member.
+type GuestResponse struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	IsChild bool   `json:"isChild"`
 }
 
 // RSVPResponse is the JSON shape the frontend consumes (the sqlc-generated
 // database.Rsvp has no JSON tags and pgtype fields, so it can't be returned directly).
 type RSVPResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	Attending   bool   `json:"attending"`
-	Allergies   string `json:"allergies"`
-	Drinker     bool   `json:"drinker"`
-	Questions   string `json:"questions"`
-	SubmittedAt string `json:"submittedAt"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Email       string          `json:"email"`
+	Attending   bool            `json:"attending"`
+	Allergies   string          `json:"allergies"`
+	Drinker     bool            `json:"drinker"`
+	Questions   string          `json:"questions"`
+	SubmittedAt string          `json:"submittedAt"`
+	Guests      []GuestResponse `json:"guests"`
 }
 
-func toRSVPResponse(r database.Rsvp) RSVPResponse {
+func toRSVPResponse(r database.Rsvp, guests []GuestResponse) RSVPResponse {
+	if guests == nil {
+		guests = []GuestResponse{}
+	}
 	return RSVPResponse{
 		ID:          uuid.UUID(r.ID.Bytes).String(),
 		Name:        r.Name,
@@ -62,6 +81,7 @@ func toRSVPResponse(r database.Rsvp) RSVPResponse {
 		Drinker:     r.Drinker,
 		Questions:   r.Question.String,
 		SubmittedAt: r.Createdat.Time.Format(time.RFC3339),
+		Guests:      guests,
 	}
 }
 
@@ -138,6 +158,7 @@ func main() {
 	defer db.Close()
 
 	programState := state{
+		db:            db,
 		queries:       database.New(db),
 		adminPassword: mustEnv("ADMIN_PASSWORD"),
 		sessionSecret: mustEnv("SESSION_SECRET"),
@@ -160,6 +181,7 @@ func main() {
 	})
 
 	server.POST("/api/rsvps", func(c *gin.Context) {
+		ctx := c.Request.Context()
 		var rsvp RSVP
 		decoder := json.NewDecoder(c.Request.Body)
 		if err := decoder.Decode(&rsvp); err != nil {
@@ -167,8 +189,18 @@ func main() {
 			return
 		}
 
-		user, err := programState.queries.CreateRsvp(c.Request.Context(), database.CreateRsvpParams{
-			ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		// Insert the RSVP and its additional guests atomically.
+		tx, err := programState.db.Begin(ctx)
+		if err != nil {
+			c.AbortWithError(500, err)
+			return
+		}
+		defer tx.Rollback(ctx)
+		qtx := programState.queries.WithTx(tx)
+
+		rsvpID := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+		user, err := qtx.CreateRsvp(ctx, database.CreateRsvpParams{
+			ID:        rsvpID,
 			Createdat: pgtype.Timestamp{Time: time.Now(), Valid: true},
 			Name:      rsvp.Name,
 			Email:     rsvp.Email,
@@ -177,8 +209,27 @@ func main() {
 			Drinker:   rsvp.Drinker,
 			Question:  pgtype.Text{String: rsvp.Questions, Valid: true},
 		})
-
 		if err != nil {
+			c.AbortWithError(500, err)
+			return
+		}
+
+		for _, g := range rsvp.AdditionalGuests {
+			if strings.TrimSpace(g.Name) == "" {
+				continue
+			}
+			if _, err := qtx.CreateGuest(ctx, database.CreateGuestParams{
+				ID:      pgtype.UUID{Bytes: uuid.New(), Valid: true},
+				Rsvpid:  rsvpID,
+				Name:    g.Name,
+				Ischild: g.IsChild,
+			}); err != nil {
+				c.AbortWithError(500, err)
+				return
+			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
 			c.AbortWithError(500, err)
 			return
 		}
@@ -186,14 +237,30 @@ func main() {
 	})
 
 	server.GET("/api/rsvps", requireAuth(programState.sessionSecret), func(c *gin.Context) {
-		users, err := programState.queries.GetRsvps(c.Request.Context())
+		ctx := c.Request.Context()
+		users, err := programState.queries.GetRsvps(ctx)
 		if err != nil {
 			c.AbortWithError(500, err)
 			return
 		}
+		guests, err := programState.queries.GetGuests(ctx)
+		if err != nil {
+			c.AbortWithError(500, err)
+			return
+		}
+		// Group guests by their RSVP id.
+		guestsByRSVP := make(map[string][]GuestResponse)
+		for _, g := range guests {
+			rsvpID := uuid.UUID(g.Rsvpid.Bytes).String()
+			guestsByRSVP[rsvpID] = append(guestsByRSVP[rsvpID], GuestResponse{
+				ID:      uuid.UUID(g.ID.Bytes).String(),
+				Name:    g.Name,
+				IsChild: g.Ischild,
+			})
+		}
 		resp := make([]RSVPResponse, len(users))
 		for i, u := range users {
-			resp[i] = toRSVPResponse(u)
+			resp[i] = toRSVPResponse(u, guestsByRSVP[uuid.UUID(u.ID.Bytes).String()])
 		}
 		c.JSON(200, resp)
 	})

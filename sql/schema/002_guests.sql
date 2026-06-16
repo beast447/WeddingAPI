@@ -1,0 +1,10 @@
+-- +goose Up
+CREATE TABLE guests(
+    ID UUID PRIMARY KEY,
+    RsvpID UUID NOT NULL REFERENCES rsvps(ID) ON DELETE CASCADE,
+    Name TEXT NOT NULL,
+    IsChild BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- +goose Down
+DROP TABLE guests;

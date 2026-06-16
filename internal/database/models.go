@@ -8,6 +8,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Guest struct {
+	ID      pgtype.UUID
+	Rsvpid  pgtype.UUID
+	Name    string
+	Ischild bool
+}
+
 type Rsvp struct {
 	ID        pgtype.UUID
 	Createdat pgtype.Timestamp
