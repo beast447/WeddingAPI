@@ -35,6 +35,7 @@ type state struct {
 type Guest struct {
 	Name    string `json:"name"`
 	IsChild bool   `json:"isChild"`
+	Drinker bool   `json:"drinker"`
 }
 
 type RSVP struct {
@@ -52,6 +53,7 @@ type GuestResponse struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	IsChild bool   `json:"isChild"`
+	Drinker bool   `json:"drinker"`
 }
 
 // RSVPResponse is the JSON shape the frontend consumes (the sqlc-generated
@@ -223,6 +225,7 @@ func main() {
 				Rsvpid:  rsvpID,
 				Name:    g.Name,
 				Ischild: g.IsChild,
+				Drinker: g.Drinker && !g.IsChild,
 			}); err != nil {
 				c.AbortWithError(500, err)
 				return
@@ -256,6 +259,7 @@ func main() {
 				ID:      uuid.UUID(g.ID.Bytes).String(),
 				Name:    g.Name,
 				IsChild: g.Ischild,
+				Drinker: g.Drinker,
 			})
 		}
 		resp := make([]RSVPResponse, len(users))

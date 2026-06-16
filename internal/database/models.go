@@ -13,6 +13,7 @@ type Guest struct {
 	Rsvpid  pgtype.UUID
 	Name    string
 	Ischild bool
+	Drinker bool
 }
 
 type Rsvp struct {

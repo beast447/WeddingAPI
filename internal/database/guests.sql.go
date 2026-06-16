@@ -12,9 +12,9 @@ import (
 )
 
 const createGuest = `-- name: CreateGuest :one
-INSERT INTO guests(ID, RsvpID, Name, IsChild)
-VALUES($1, $2, $3, $4)
-RETURNING id, rsvpid, name, ischild
+INSERT INTO guests(ID, RsvpID, Name, IsChild, Drinker)
+VALUES($1, $2, $3, $4, $5)
+RETURNING id, rsvpid, name, ischild, drinker
 `
 
 type CreateGuestParams struct {
@@ -22,6 +22,7 @@ type CreateGuestParams struct {
 	Rsvpid  pgtype.UUID
 	Name    string
 	Ischild bool
+	Drinker bool
 }
 
 func (q *Queries) CreateGuest(ctx context.Context, arg CreateGuestParams) (Guest, error) {
@@ -30,6 +31,7 @@ func (q *Queries) CreateGuest(ctx context.Context, arg CreateGuestParams) (Guest
 		arg.Rsvpid,
 		arg.Name,
 		arg.Ischild,
+		arg.Drinker,
 	)
 	var i Guest
 	err := row.Scan(
@@ -37,12 +39,13 @@ func (q *Queries) CreateGuest(ctx context.Context, arg CreateGuestParams) (Guest
 		&i.Rsvpid,
 		&i.Name,
 		&i.Ischild,
+		&i.Drinker,
 	)
 	return i, err
 }
 
 const getGuests = `-- name: GetGuests :many
-SELECT id, rsvpid, name, ischild
+SELECT id, rsvpid, name, ischild, drinker
 FROM guests
 ORDER BY RsvpID, Name
 `
@@ -61,6 +64,7 @@ func (q *Queries) GetGuests(ctx context.Context) ([]Guest, error) {
 			&i.Rsvpid,
 			&i.Name,
 			&i.Ischild,
+			&i.Drinker,
 		); err != nil {
 			return nil, err
 		}
